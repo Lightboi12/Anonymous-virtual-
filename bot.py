@@ -412,18 +412,18 @@ async def on_startup(app):
 
     webhook_url = f"{RENDER_EXTERNAL_URL.rstrip('/')}/telegram/{WEBHOOK_SECRET}"
 
-    await bot.set_webhook(
-        url=webhook_url,
-        secret_token=WEBHOOK_SECRET,
-        allowed_updates=dp.resolve_used_update_types()
-    )
-
-    print(f"Webhook registered: {RENDER_EXTERNAL_URL}/telegram/[hidden]")
-    webhook_url = f"{RENDER_EXTERNAL_URL}/telegram/{WEBHOOK_SECRET}"
-    await bot.set_webhook(
-        webhook_url, secret_token=WEBHOOK_SECRET, drop_pending_updates=True,
-        allowed_updates=dp.resolve_used_update_types()
-    )
+    try:
+        info = await bot.get_webhook_info()
+        if info.url != webhook_url:
+            await bot.set_webhook(
+                url=webhook_url,
+                secret_token=WEBHOOK_SECRET,
+                allowed_updates=dp.resolve_used_update_types()
+            )
+        print("Telegram webhook setup checked successfully.")
+    except Exception as e:
+        print(f"Webhook setup failed: {type(e).__name__}: {e}")
+        raise
 
 async def on_shutdown(app):
     await bot.delete_webhook()
