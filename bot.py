@@ -409,6 +409,16 @@ async def stats(message: Message):
 async def on_startup(app):
     if not RENDER_EXTERNAL_URL:
         raise RuntimeError("Set RENDER_EXTERNAL_URL to your Render service URL.")
+
+    webhook_url = f"{RENDER_EXTERNAL_URL.rstrip('/')}/telegram/{WEBHOOK_SECRET}"
+
+    await bot.set_webhook(
+        url=webhook_url,
+        secret_token=WEBHOOK_SECRET,
+        allowed_updates=dp.resolve_used_update_types()
+    )
+
+    print(f"Webhook registered: {RENDER_EXTERNAL_URL}/telegram/[hidden]")
     webhook_url = f"{RENDER_EXTERNAL_URL}/telegram/{WEBHOOK_SECRET}"
     await bot.set_webhook(
         webhook_url, secret_token=WEBHOOK_SECRET, drop_pending_updates=True,
