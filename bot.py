@@ -437,21 +437,34 @@ async def on_startup(app):
         raise
 
 async def on_shutdown(app):
-    await bot.delete_webhook()
     await bot.session.close()
+
 
 def create_app():
     init_db()
     app = web.Application()
     app["bot"] = bot
     app["dispatcher"] = dp
+
     app.on_startup.append(on_startup)
     app.on_shutdown.append(on_shutdown)
-    SimpleRequestHandler(dispatcher=dp, bot=bot, secret_token=WEBHOOK_SECRET).register(app, path=f"/telegram/{WEBHOOK_SECRET}")
+
+    SimpleRequestHandler(
+        dispatcher=dp,
+        bot=bot,
+        secret_token=WEBHOOK_SECRET
+    ).register(
+        app,
+        path=f"/telegram/{WEBHOOK_SECRET}"
+    )
+
     setup_application(app, dp, bot=bot)
+
     async def health(request):
         return web.Response(text="Telegram bot is running.")
+
     app.router.add_get("/", health)
+
     return app
 
 if __name__ == "__main__":
