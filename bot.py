@@ -24,6 +24,7 @@ if not TOKEN or not ADMIN_ID:
 
 bot = Bot(TOKEN)
 dp = Dispatcher()
+support_waiting = set()  # user IDs currently composing a support message
 
 JOIN_TEXT = "🔐 JOIN OUR REQUIRED CHANNELS TO USE THIS BOT\n\nJoin every channel/group below, then tap ✅ I've Joined."
 
@@ -140,6 +141,40 @@ async def verify_join_callback(callback: CallbackQuery):
     else:
         await callback.answer("Please join every required channel/group first, then tap again.", show_alert=True)
 
+@dp.message(F.text == "💬 Contact Support")
+async def begin_support(message: Message):
+    if not await gate(message):
+        return
+    support_waiting.add(message.from_user.id)
+    await message.answer("💬 Send your message now. Our support team will receive it and reply here. Send /cancel to stop.")
+
+@dp.message(Command("cancel"))
+async def cancel_support(message: Message):
+    if message.from_user.id in support_waiting:
+        support_waiting.discard(message.from_user.id)
+        await message.answer("Support message cancelled.", reply_markup=MAIN_KB)
+    else:
+        await message.answer("Nothing to cancel.", reply_markup=MAIN_KB)
+
+@dp.message(Command("reply"))
+async def admin_reply(message: Message):
+    if not is_owner(message.from_user.id):
+        return await message.answer("⛔ Owner only.")
+    parts = (message.text or "").split(maxsplit=2)
+    if len(parts) < 3 or not parts[1].isdigit():
+        return await message.answer("Usage: /reply <user_id> <message>\nExample: /reply 123456789 Hello, how can we help?")
+    try:
+        await bot.send_message(int(parts[1]), "🆘 Support team reply:\n\n" + parts[2])
+        await message.answer("✅ Reply sent.")
+    except Exception as exc:
+        await message.answer(f"❌ Could not send reply. Check the user ID and whether the user has started the bot. ({type(exc).__name__})")
+
+@dp.message(F.text == "🔙 Back to Menu")
+async def back_to_menu(message: Message):
+    support_waiting.discard(message.from_user.id)
+    if await gate(message):
+        await message.answer("Main menu:", reply_markup=MAIN_KB)
+
 @dp.message(F.text.in_({"📲 Get Number", "📩 Receive OTP", "🌍 Available Countries", "🆘 Support"}))
 async def services(message: Message):
     if not await gate(message):
@@ -148,9 +183,40 @@ async def services(message: Message):
         "📲 Get Number": "📲 Get Number\n\nA legitimate number-provider API must be connected before this feature can supply numbers.",
         "📩 Receive OTP": "📩 Receive OTP\n\nConnect your provider's API to retrieve OTPs for numbers you are authorized to use.",
         "🌍 Available Countries": "🌍 Available Countries\n\nConnect a number-provider API to list its supported countries.",
-        "🆘 Support": "🆘 Support\n\nPlease contact the bot administrator for help.",
+        "🆘 Support": "🆘 CUSTOMER SUPPORT\n\nTap 💬 Contact Support to send a message directly to our support team. You can return to the main menu at any time.",
     }
+    if message.text == "🆘 Support":
+        support_kb = ReplyKeyboardMarkup(keyboard=[
+            [KeyboardButton(text="💬 Contact Support")],
+            [KeyboardButton(text="🔙 Back to Menu")],
+        ], resize_keyboard=True)
+        return await message.answer(replies[message.text], reply_markup=support_kb)
     await message.answer(replies[message.text], reply_markup=MAIN_KB)
+
+@dp.message()
+async def support_message_or_fallback(message: Message):
+    uid = message.from_user.id
+    if uid in support_waiting and uid != ADMIN_ID:
+        if not await gate(message):
+            support_waiting.discard(uid)
+            return
+        text_content = message.text or message.caption or "[Non-text message]"
+        username = f"@{message.from_user.username}" if message.from_user.username else "No username"
+        try:
+            await bot.send_message(ADMIN_ID, f"🆘 SUPPORT MESSAGE\nFrom: {message.from_user.full_name} ({username})\nUser ID: {uid}\n\n{text_content}\n\nReply with: /reply {uid} <your message>")
+            # Forward attachments as well as the readable summary when possible.
+            if message.photo:
+                await bot.send_photo(ADMIN_ID, message.photo[-1].file_id, caption=f"Attachment from support user {uid}")
+            elif message.document:
+                await bot.send_document(ADMIN_ID, message.document.file_id, caption=f"Attachment from support user {uid}")
+            elif message.voice:
+                await bot.send_voice(ADMIN_ID, message.voice.file_id, caption=f"Voice message from support user {uid}")
+            await message.answer("✅ Your message has been sent to support. You can send another message or /cancel to finish.")
+        except Exception:
+            await message.answer("❌ Sorry, your message could not be delivered. Please try again later.")
+        return
+    if await gate(message):
+        await message.answer("Please choose a service from the menu.", reply_markup=MAIN_KB)
 
 @dp.message(Command("addforcechannel"))
 async def add_channel(message: Message):
@@ -238,11 +304,6 @@ async def stats(message: Message):
     with db() as con:
         count = con.execute("SELECT COUNT(*) n FROM users").fetchone()["n"]
     await message.answer(f"📊 Registered users: {count}\nForce-join targets: {len(targets())}")
-
-@dp.message()
-async def fallback(message: Message):
-    if await gate(message):
-        await message.answer("Please choose a service from the menu.", reply_markup=MAIN_KB)
 
 async def on_startup(app):
     if not RENDER_EXTERNAL_URL:
