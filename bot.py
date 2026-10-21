@@ -408,19 +408,30 @@ async def stats(message: Message):
 
 async def on_startup(app):
     if not RENDER_EXTERNAL_URL:
-        raise RuntimeError("Set RENDER_EXTERNAL_URL to your Render service URL.")
+        raise RuntimeError(
+            "Set RENDER_EXTERNAL_URL to your Render service URL."
+        )
 
-    webhook_url = f"{RENDER_EXTERNAL_URL.rstrip('/')}/telegram/{WEBHOOK_SECRET}"
+    webhook_url = (
+        f"{RENDER_EXTERNAL_URL.rstrip('/')}"
+        f"/telegram/{WEBHOOK_SECRET}"
+    )
 
     try:
         info = await bot.get_webhook_info()
-        if info.url != webhook_url:
-            await bot.set_webhook(
-                url=webhook_url,
-                secret_token=WEBHOOK_SECRET,
-                allowed_updates=dp.resolve_used_update_types()
-            )
-        print("Telegram webhook setup checked successfully.")
+
+        if info.url == webhook_url:
+            print("Telegram webhook is already registered.")
+            return
+
+        await bot.set_webhook(
+            url=webhook_url,
+            secret_token=WEBHOOK_SECRET,
+            allowed_updates=dp.resolve_used_update_types(),
+        )
+
+        print("Telegram webhook registered successfully.")
+
     except Exception as e:
         print(f"Webhook setup failed: {type(e).__name__}: {e}")
         raise
