@@ -8,7 +8,7 @@ from aiohttp import web
 from dotenv import load_dotenv
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command, CommandStart
-from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, Update
+from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, Update, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 
 load_dotenv()
@@ -25,11 +25,19 @@ if not TOKEN or not ADMIN_ID:
 bot = Bot(TOKEN)
 dp = Dispatcher()
 
-JOIN_TEXT = "🔐 JOIN OUR CHANNELS\n\nTo use this bot, join all the\nrequired channels and groups below."
-JOIN_KB = ReplyKeyboardMarkup(keyboard=[
-    [KeyboardButton(text="📢 Join Channel"), KeyboardButton(text="👥 Join Group")],
-    [KeyboardButton(text="✅ I've Joined")],
-], resize_keyboard=True)
+JOIN_TEXT = "🔐 JOIN OUR REQUIRED CHANNELS TO USE THIS BOT\n\nJoin every channel/group below, then tap ✅ I've Joined."
+
+def join_keyboard():
+    rows = []
+    for target in targets():
+        style = "primary" if target["kind"] == "channel" else "primary"
+        rows.append([InlineKeyboardButton(
+            text=f"📢 Join {target['label']}", url=target["url"], style=style
+        )])
+    rows.append([InlineKeyboardButton(
+        text="✅ I've Joined", callback_data="verify_join", style="success"
+    )])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 MAIN_KB = ReplyKeyboardMarkup(keyboard=[
     [KeyboardButton(text="📲 Get Number"), KeyboardButton(text="📩 Receive OTP")],
     [KeyboardButton(text="🌍 Available Countries"), KeyboardButton(text="🆘 Support")],
@@ -93,7 +101,7 @@ async def joined_all(uid):
 async def gate(message):
     if await joined_all(message.from_user.id):
         return True
-    await message.answer(JOIN_TEXT, reply_markup=JOIN_KB)
+    await message.answer(JOIN_TEXT, reply_markup=join_keyboard())
     return False
 
 @dp.message(CommandStart())
@@ -102,24 +110,13 @@ async def start(message: Message):
     if await gate(message):
         await message.answer("📱 Welcome to Number Service!\n\nChoose a service below.", reply_markup=MAIN_KB)
 
-@dp.message(F.text == "📢 Join Channel")
-async def show_channels(message: Message):
-    ts = targets("channel")
-    body = "\n\n".join(f"{t['label']}\n{t['url']}" for t in ts) or "No channels configured yet."
-    await message.answer("📢 Required channels:\n\n" + body, disable_web_page_preview=True)
-
-@dp.message(F.text == "👥 Join Group")
-async def show_groups(message: Message):
-    ts = targets("group")
-    body = "\n\n".join(f"{t['label']}\n{t['url']}" for t in ts) or "No groups configured yet."
-    await message.answer("👥 Required groups:\n\n" + body, disable_web_page_preview=True)
-
-@dp.message(F.text == "✅ I've Joined")
-async def verify_join(message: Message):
-    if await joined_all(message.from_user.id):
-        await message.answer("✅ Membership verified! You can now use the bot.", reply_markup=MAIN_KB)
+@dp.callback_query(F.data == "verify_join")
+async def verify_join_callback(callback: CallbackQuery):
+    if await joined_all(callback.from_user.id):
+        await callback.answer("Membership verified!")
+        await callback.message.answer("✅ Membership verified! You can now use the bot.", reply_markup=MAIN_KB)
     else:
-        await message.answer("❌ Join every required channel/group first, then tap again.", reply_markup=JOIN_KB)
+        await callback.answer("Please join every required channel/group first, then tap again.", show_alert=True)
 
 @dp.message(F.text.in_({"📲 Get Number", "📩 Receive OTP", "🌍 Available Countries", "🆘 Support"}))
 async def services(message: Message):
