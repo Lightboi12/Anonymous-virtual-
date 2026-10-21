@@ -2,6 +2,7 @@ import asyncio
 import os
 import sqlite3
 import time
+import secrets
 from datetime import datetime, timezone
 
 from aiohttp import web
@@ -58,6 +59,7 @@ def init_db():
         CREATE TABLE IF NOT EXISTS users(user_id INTEGER PRIMARY KEY, username TEXT, first_name TEXT, created_at INTEGER);
         CREATE TABLE IF NOT EXISTS targets(id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT, chat_id TEXT, url TEXT, label TEXT);
         CREATE TABLE IF NOT EXISTS owners(user_id INTEGER PRIMARY KEY, expires_at INTEGER, added_by INTEGER);
+        CREATE TABLE IF NOT EXISTS demo_orders(order_id TEXT PRIMARY KEY, user_id INTEGER NOT NULL, country_code TEXT NOT NULL, country_name TEXT NOT NULL, service TEXT NOT NULL, status TEXT NOT NULL, created_at INTEGER NOT NULL);
         """)
 
 def save_user(u):
@@ -175,23 +177,122 @@ async def back_to_menu(message: Message):
     if await gate(message):
         await message.answer("Main menu:", reply_markup=MAIN_KB)
 
+COUNTRIES = [
+    ("ng", "🇳🇬 Nigeria"), ("us", "🇺🇸 United States"),
+    ("gb", "🇬🇧 United Kingdom"), ("ca", "🇨🇦 Canada"),
+    ("in", "🇮🇳 India"), ("za", "🇿🇦 South Africa"),
+    ("gh", "🇬🇭 Ghana"), ("ke", "🇰🇪 Kenya"),
+]
+DEMO_SERVICES = ["Telegram", "WhatsApp", "Instagram", "Other"]
+
+
+def countries_keyboard(prefix="getnum"):
+    rows = []
+    for code, name in COUNTRIES:
+        rows.append([InlineKeyboardButton(text=name, callback_data=f"{prefix}:{code}")])
+    rows.append([InlineKeyboardButton(text="🔙 Back to Menu", callback_data="demo:menu")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def services_keyboard(country_code):
+    rows = [[InlineKeyboardButton(text=f"📱 {service}", callback_data=f"demo_service:{country_code}:{i}")]
+            for i, service in enumerate(DEMO_SERVICES)]
+    rows.append([InlineKeyboardButton(text="🔙 Choose another country", callback_data="demo:choose_country")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 @dp.message(F.text.in_({"📲 Get Number", "📩 Receive OTP", "🌍 Available Countries", "🆘 Support"}))
 async def services(message: Message):
     if not await gate(message):
         return
-    replies = {
-        "📲 Get Number": "📲 Get Number\n\nA legitimate number-provider API must be connected before this feature can supply numbers.",
-        "📩 Receive OTP": "📩 Receive OTP\n\nConnect your provider's API to retrieve OTPs for numbers you are authorized to use.",
-        "🌍 Available Countries": "🌍 Available Countries\n\nConnect a number-provider API to list its supported countries.",
-        "🆘 Support": "🆘 CUSTOMER SUPPORT\n\nTap 💬 Contact Support to send a message directly to our support team. You can return to the main menu at any time.",
-    }
-    if message.text == "🆘 Support":
-        support_kb = ReplyKeyboardMarkup(keyboard=[
-            [KeyboardButton(text="💬 Contact Support")],
-            [KeyboardButton(text="🔙 Back to Menu")],
-        ], resize_keyboard=True)
-        return await message.answer(replies[message.text], reply_markup=support_kb)
-    await message.answer(replies[message.text], reply_markup=MAIN_KB)
+    if message.text == "📲 Get Number":
+        return await message.answer(
+            "📲 GET NUMBER\n\nChoose a country. This build is in DEMO mode: it will create a sample order, not a real phone number. A legitimate provider API must be connected for live numbers.",
+            reply_markup=countries_keyboard("getnum"))
+    if message.text == "🌍 Available Countries":
+        country_text = "🌍 AVAILABLE COUNTRIES (DEMO LIST)\n\n" + "\n".join(name for _, name in COUNTRIES)
+        return await message.answer(country_text + "\n\nThese are sample countries, not live provider availability.", reply_markup=MAIN_KB)
+    if message.text == "📩 Receive OTP":
+        with db() as con:
+            orders = con.execute("SELECT order_id,country_name,service,status,created_at FROM demo_orders WHERE user_id=? ORDER BY created_at DESC LIMIT 10", (message.from_user.id,)).fetchall()
+        if not orders:
+            return await message.answer("📩 RECEIVE OTP\n\nYou don't have any demo orders yet. Tap 📲 Get Number to create a sample order. Live OTP retrieval requires a legitimate provider API and an authorized number.", reply_markup=MAIN_KB)
+        rows = [[InlineKeyboardButton(text=f"{o['order_id']} · {o['country_name']} · {o['service']}", callback_data=f"demo_order:{o['order_id']}")] for o in orders]
+        rows.append([InlineKeyboardButton(text="🔙 Back to Menu", callback_data="demo:menu")])
+        return await message.answer("📩 YOUR DEMO ORDERS\n\nChoose an order to view its status. No real SMS is connected yet.", reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+    support_kb = ReplyKeyboardMarkup(keyboard=[
+        [KeyboardButton(text="💬 Contact Support")],
+        [KeyboardButton(text="🔙 Back to Menu")],
+    ], resize_keyboard=True)
+    await message.answer("🆘 CUSTOMER SUPPORT\n\nTap 💬 Contact Support to send a message directly to our support team. You can return to the main menu at any time.", reply_markup=support_kb)
+
+
+@dp.callback_query(F.data == "demo:menu")
+async def demo_back_menu(callback: CallbackQuery):
+    if not await joined_all(callback.from_user.id):
+        await callback.answer("Please join all required channels/groups first.", show_alert=True)
+        try:
+            await callback.message.answer(JOIN_TEXT, reply_markup=join_keyboard())
+        except Exception:
+            pass
+        return
+    await callback.answer()
+    await callback.message.answer("Main menu:", reply_markup=MAIN_KB)
+
+
+@dp.callback_query(F.data == "demo:choose_country")
+async def demo_choose_country(callback: CallbackQuery):
+    if not await joined_all(callback.from_user.id):
+        return await callback.answer("Join all required channels/groups first.", show_alert=True)
+    await callback.answer()
+    await callback.message.answer("📲 Choose a country (demo list):", reply_markup=countries_keyboard("getnum"))
+
+
+@dp.callback_query(F.data.startswith("getnum:"))
+async def demo_country_selected(callback: CallbackQuery):
+    if not await joined_all(callback.from_user.id):
+        return await callback.answer("Join all required channels/groups first.", show_alert=True)
+    code = callback.data.split(":", 1)[1]
+    country = next((name for c, name in COUNTRIES if c == code), None)
+    if not country:
+        return await callback.answer("Unknown country.", show_alert=True)
+    await callback.answer()
+    await callback.message.answer(f"🌍 {country} selected. Choose a service.\n\nDemo only: no real number will be issued.", reply_markup=services_keyboard(code))
+
+
+@dp.callback_query(F.data.startswith("demo_service:"))
+async def demo_service_selected(callback: CallbackQuery):
+    if not await joined_all(callback.from_user.id):
+        return await callback.answer("Join all required channels/groups first.", show_alert=True)
+    try:
+        _, code, service_idx = callback.data.split(":", 2)
+        service = DEMO_SERVICES[int(service_idx)]
+        country = next(name for c, name in COUNTRIES if c == code)
+    except (ValueError, StopIteration, IndexError):
+        return await callback.answer("Invalid selection.", show_alert=True)
+    order_id = "DEMO-" + secrets.token_hex(3).upper()
+    with db() as con:
+        con.execute("INSERT INTO demo_orders(order_id,user_id,country_code,country_name,service,status,created_at) VALUES(?,?,?,?,?,?,?)",
+                    (order_id, callback.from_user.id, code, country, service, "demo_only", int(time.time())))
+    await callback.answer("Demo order created")
+    await callback.message.answer(
+        f"✅ DEMO ORDER CREATED\n\nOrder: {order_id}\nCountry: {country}\nService: {service}\nNumber: Not assigned (demo mode)\nStatus: Waiting for provider integration\n\nThis is a test order only; it is not a real phone number and cannot receive SMS. Use 📩 Receive OTP to view its status.",
+        reply_markup=MAIN_KB)
+
+
+@dp.callback_query(F.data.startswith("demo_order:"))
+async def demo_order_status(callback: CallbackQuery):
+    if not await joined_all(callback.from_user.id):
+        return await callback.answer("Join all required channels/groups first.", show_alert=True)
+    order_id = callback.data.split(":", 1)[1]
+    with db() as con:
+        order = con.execute("SELECT * FROM demo_orders WHERE order_id=? AND user_id=?", (order_id, callback.from_user.id)).fetchone()
+    if not order:
+        return await callback.answer("Order not found.", show_alert=True)
+    await callback.answer()
+    await callback.message.answer(
+        f"📩 ORDER STATUS\n\nOrder: {order['order_id']}\nCountry: {order['country_name']}\nService: {order['service']}\nStatus: Demo only — no live SMS provider connected.\n\nWhen a provider for numbers you are authorized to use is connected, this screen can check incoming messages.",
+        reply_markup=MAIN_KB)
 
 @dp.message()
 async def support_message_or_fallback(message: Message):
