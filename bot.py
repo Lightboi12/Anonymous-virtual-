@@ -8,7 +8,7 @@ from aiohttp import web
 from dotenv import load_dotenv
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command, CommandStart
-from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, Update, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
+from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, Update, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, ChatMemberUpdated
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 
 load_dotenv()
@@ -109,6 +109,28 @@ async def start(message: Message):
     save_user(message.from_user)
     if await gate(message):
         await message.answer("📱 Welcome to Number Service!\n\nChoose a service below.", reply_markup=MAIN_KB)
+
+@dp.chat_member()
+async def membership_changed(event: ChatMemberUpdated):
+    """Notify users when they leave a required target; every later message is gated too."""
+    target_ids = {str(t["chat_id"]).lstrip("@") for t in targets()}
+    chat_username = (event.chat.username or "").lstrip("@")
+    chat_id = str(event.chat.id)
+    if chat_id not in target_ids and chat_username not in target_ids:
+        return
+    old_status = event.old_chat_member.status
+    new_status = event.new_chat_member.status
+    was_member = old_status in ("member", "administrator", "creator", "restricted")
+    is_member = new_status in ("member", "administrator", "creator", "restricted")
+    if was_member and not is_member:
+        try:
+            await bot.send_message(
+                event.new_chat_member.user.id,
+                "⛔ You left a required channel or group. Join all required targets again to use this bot.",
+                reply_markup=join_keyboard(),
+            )
+        except Exception:
+            pass
 
 @dp.callback_query(F.data == "verify_join")
 async def verify_join_callback(callback: CallbackQuery):
@@ -226,7 +248,10 @@ async def on_startup(app):
     if not RENDER_EXTERNAL_URL:
         raise RuntimeError("Set RENDER_EXTERNAL_URL to your Render service URL.")
     webhook_url = f"{RENDER_EXTERNAL_URL}/telegram/{WEBHOOK_SECRET}"
-    await bot.set_webhook(webhook_url, secret_token=WEBHOOK_SECRET, drop_pending_updates=True)
+    await bot.set_webhook(
+        webhook_url, secret_token=WEBHOOK_SECRET, drop_pending_updates=True,
+        allowed_updates=dp.resolve_used_update_types()
+    )
 
 async def on_shutdown(app):
     await bot.delete_webhook()
